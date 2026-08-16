@@ -1,22 +1,3 @@
-"""
-clustering.py
--------------
-Groups individual days into clusters based on the *shape* of their hourly
-consumption profile (e.g. "typical weekday", "typical weekend/low-demand
-day"), rather than by absolute consumption level.
-
-Approach:
-1. Reshape the hourly series into one row per day, one column per hour
-   (a 24-dimensional "daily profile").
-2. Normalise each day's profile (z-score per row) so clustering groups by
-   SHAPE (when peaks/troughs occur) rather than by absolute magnitude --
-   two days with very different total demand but the same daily rhythm
-   should land in the same cluster.
-3. Use K-means, choosing k via silhouette score rather than guessing.
-4. Visualise the resulting cluster centroids (average shape per cluster)
-   and a 2D PCA projection so cluster separation can be seen visually.
-"""
-
 from __future__ import annotations
 
 import numpy as np

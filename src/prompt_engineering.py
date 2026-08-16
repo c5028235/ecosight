@@ -1,138 +1,244 @@
-"""
-prompt_engineering.py
-----------------------
-Uses an LLM (Claude, via the Anthropic API) to turn EcoSight's numeric
-outputs (forecast accuracy, cluster findings, carbon savings) into a
-plain-English report a non-technical stakeholder could actually read.
-
-This module is deliberately built to DEMONSTRATE prompt engineering as a
-skill, not just "call an API":
-
-1. `NAIVE_PROMPT` vs `build_engineered_prompt()` -- a vague one-line prompt
-   is compared against a carefully constructed one, so the difference is
-   visible and explainable, not just asserted.
-2. The engineered prompt applies several standard techniques:
-   - a system prompt establishing role, audience, and tone
-   - explicit structure (asks for specific named sections)
-   - explicit constraints (length, no jargon without explanation)
-   - grounding: the actual numbers are injected into the prompt so the
-     model reports on YOUR data rather than inventing plausible-sounding
-     generic content (this matters a lot for factual reliability)
-3. A `mock` fallback mode: if no API key is configured, this module still
-   runs end-to-end using a clearly-labelled placeholder response, so the
-   rest of the pipeline (and this demo) never breaks just because a key
-   isn't set. Same fallback philosophy used for the data sources earlier.
-
-To use this for real: get an API key from https://console.anthropic.com
-and set it as an environment variable before running:
-    export ANTHROPIC_API_KEY=your-key-here
-"""
-
 from __future__ import annotations
 
 import os
-import json
 from pathlib import Path
 
-# Anchor all input/output paths to the project root (the folder containing
-# src/, models/, docs/, data/) rather than trusting the current working
-# directory, so this script works correctly no matter which folder it's
-# run from.
+
+# ---------------------------------------------------------------------------
+# PROJECT PATHS
+# ---------------------------------------------------------------------------
+
+# Anchor all paths to the project root rather than relying on the terminal's
+# current working directory.
+#
+# Expected structure:
+#
+# EcoSight/
+# ├── src/
+# │   └── prompt_engineering.py
+# ├── docs/
+# ├── models/
+# └── data/
+#
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+# ---------------------------------------------------------------------------
+# NAIVE PROMPT
+# ---------------------------------------------------------------------------
+
+# Deliberately vague prompt used as a comparison against the engineered
+# version below.
 NAIVE_PROMPT = "Write about the energy data."
 
+# ---------------------------------------------------------------------------
+# ENGINEERED PROMPT
+# ---------------------------------------------------------------------------
 
 def build_engineered_prompt(context: dict) -> tuple[str, str]:
     """
-    Returns (system_prompt, user_prompt) for a well-engineered request.
+    Build the instruction prompt and user prompt for the OpenAI model.
 
-    Techniques used:
-      - Role/audience framing in the system prompt
-      - Explicit output structure (named sections)
-      - Explicit constraints (length, jargon handling)
-      - Grounding: real numbers are injected, not left for the model to
-        invent
+    Returns:
+        tuple[str, str]:
+            (instructions, user_prompt)
+
+    Prompt engineering techniques demonstrated:
+      - Role definition
+      - Audience specification
+      - Tone control
+      - Grounding using real numerical results
+      - Explicit output structure
+      - Length constraints
+      - Anti-hallucination constraints
+      - Technical-jargon handling
     """
-    system_prompt = (
-        "You are an analyst preparing a briefing for IntelliGen's leadership "
-        "team, who are business-savvy but not data scientists. Write in plain "
-        "English. When you use a technical term (e.g. 'RMSE', 'SHAP', "
-        "'genetic algorithm'), briefly explain it in the same sentence rather "
-        "than assuming prior knowledge."
+
+    instructions = (
+        "You are a senior energy and data analyst preparing a briefing for "
+        "IntelliGen's leadership team. The audience is business-savvy but "
+        "does not have specialist knowledge of machine learning or data "
+        "science. "
+        "\n\n"
+        "Write in clear, professional, plain English. "
+        "When you use a technical term such as MAE, Random Forest, LSTM, "
+        "clustering, reinforcement learning, or SHAP, briefly explain what "
+        "it means in the same sentence. "
+        "\n\n"
+        "Your job is to interpret the supplied EcoSight results accurately, "
+        "not to invent additional findings."
     )
 
-    user_prompt = f"""Write a short briefing (250-350 words) on the EcoSight energy
-monitoring system's results this period, based ONLY on the figures below --
-do not invent or estimate any numbers not given here.
+    user_prompt = f"""
+Prepare a short management briefing of approximately 250-350 words about
+EcoSight's energy-monitoring results for this analysis period.
 
-Structure it with these exact section headers:
+IMPORTANT GROUNDING RULES:
+- Base the briefing ONLY on the figures provided below.
+- Do not invent, estimate, infer, or fabricate numerical results.
+- If the data does not support a conclusion, state that clearly.
+- Explain the business meaning of the results rather than simply repeating
+  the numbers.
+- Use language understandable to a non-technical stakeholder.
+
+Use these EXACT section headings:
+
 1. What we measured
 2. Key findings
 3. Business impact
 4. Caveats / limitations
 
-Figures to report on:
-- Forecasting: Random Forest MAE {context['rf_mae']:.1f} {context['unit']}, LSTM MAE {context['lstm_mae']:.1f} {context['unit']}
-- Clustering: {context['n_clusters']} distinct daily demand patterns found across {context['n_days']} days analysed
-- Scheduling optimisation: {context['carbon_saving_pct']:.1f}% carbon reduction achieved by the {context['scheduler_type']} scheduler versus a naive "start immediately" baseline
-- Explainability: the top predictive feature was '{context['top_feature']}'
-"""
-    return system_prompt, user_prompt
+ECO SIGHT RESULTS
+-----------------
+
+Forecasting performance:
+- Random Forest MAE: {context['rf_mae']:.1f} {context['unit']}
+- LSTM MAE: {context['lstm_mae']:.1f} {context['unit']}
+
+Demand-pattern analysis:
+- Number of distinct daily demand patterns: {context['n_clusters']}
+- Number of days analysed: {context['n_days']}
+
+Scheduling optimisation:
+- Carbon reduction achieved: {context['carbon_saving_pct']:.1f}%
+- Scheduler type: {context['scheduler_type']}
+- Comparison baseline: naive "start immediately" scheduling
+
+Explainability:
+- Most influential predictive feature:
+  {context['top_feature']}
+
+When discussing forecasting performance, remember that MAE means
+Mean Absolute Error: the average absolute difference between predicted
+and actual electricity demand. Therefore, lower MAE indicates better
+forecast accuracy.
+
+Do not introduce numbers that are not contained in this prompt.
+""".strip()
+
+    return instructions, user_prompt
 
 
-def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-6",
-                 max_tokens: int = 800, mock: bool | None = None) -> str:
+# ---------------------------------------------------------------------------
+# OPENAI API
+# ---------------------------------------------------------------------------
+
+def call_chatgpt(
+    instructions: str,
+    user_prompt: str,
+    model: str = "gpt-5.6",
+    max_output_tokens: int = 800,
+    mock: bool | None = None,
+) -> str:
     """
-    Calls the Claude API. Falls back to a mock response if no API key is
-    set (or mock=True is forced), so this module is always safe to run,
-    even without credentials configured.
+    Send a prompt to ChatGPT through the OpenAI Responses API.
 
-    Note: model names change over time -- check https://docs.claude.com
-    for the current recommended model string before relying on this in
-    production.
+    If OPENAI_API_KEY is missing, or mock=True is supplied, the function
+    returns a placeholder instead of making an API request.
+
+    Args:
+        instructions:
+            High-level role, audience, tone, and behavioural instructions.
+
+        user_prompt:
+            The actual task and grounded EcoSight results.
+
+        model:
+            OpenAI model to use. Defaults to gpt-5.6.
+
+        max_output_tokens:
+            Maximum number of output tokens generated by the model.
+
+        mock:
+            True  -> always use mock response.
+            False -> always attempt API call.
+            None  -> automatically use mock if no API key exists.
+
+    Returns:
+        str:
+            Generated response or clearly-labelled mock/error message.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+
+    # Automatically enter mock mode when an API key has not been configured.
     use_mock = mock if mock is not None else (api_key is None)
 
     if use_mock:
         return (
-            "[MOCK RESPONSE -- no ANTHROPIC_API_KEY set, so this is a placeholder "
-            "showing where a real Claude-generated report would appear. Set the "
-            "ANTHROPIC_API_KEY environment variable and re-run to get a real response.]\n\n"
-            f"(System prompt used: {len(system_prompt)} chars, "
+            "[MOCK RESPONSE -- no OPENAI_API_KEY is configured, so this is "
+            "a placeholder showing where a real ChatGPT-generated report "
+            "would appear. Set the OPENAI_API_KEY environment variable and "
+            "re-run the program to receive a real response.]\n\n"
+            f"(Instructions used: {len(instructions)} chars, "
             f"user prompt used: {len(user_prompt)} chars)"
         )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        # Import here rather than globally so mock mode can still run even if
+        # the OpenAI package has not yet been installed.
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+
+        response = client.responses.create(
             model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+
+            # In the Responses API, "instructions" serves the role normally
+            # associated with the system prompt.
+            instructions=instructions,
+
+            # The user's request/data.
+            input=user_prompt,
+
+            # Keeps the generated management report bounded.
+            max_output_tokens=max_output_tokens,
         )
-        return response.content[0].text
+
+        # Responses API provides output_text as a convenient way of obtaining
+        # the generated text from the response object.
+        return response.output_text
+
     except Exception as e:
-        return f"[ERROR calling Claude API: {e}]"
+        return f"[ERROR calling OpenAI API: {e}]"
 
 
-def generate_report(context: dict, mock: bool | None = None) -> dict:
+# ---------------------------------------------------------------------------
+# GENERATE BOTH PROMPT VERSIONS
+# ---------------------------------------------------------------------------
+
+def generate_report(
+    context: dict,
+    mock: bool | None = None,
+) -> dict:
     """
-    Runs both the naive and engineered prompts on the same underlying data
-    and returns both, so the difference can be shown side by side.
+    Run both the naive and engineered prompts against ChatGPT.
+
+    This allows the outputs to be compared side-by-side and provides
+    evidence that prompt engineering changes the quality and usefulness
+    of the generated report.
     """
-    naive_response = call_claude(
-        system_prompt="You are a helpful assistant.",
+
+    # ---------------------------------------------------------------
+    # 1. NAIVE VERSION
+    # ---------------------------------------------------------------
+
+    naive_response = call_chatgpt(
+        instructions="You are a helpful assistant.",
         user_prompt=NAIVE_PROMPT,
         mock=mock,
     )
 
-    system_prompt, engineered_prompt = build_engineered_prompt(context)
-    engineered_response = call_claude(
-        system_prompt=system_prompt,
+    # ---------------------------------------------------------------
+    # 2. ENGINEERED VERSION
+    # ---------------------------------------------------------------
+
+    engineered_instructions, engineered_prompt = (
+        build_engineered_prompt(context)
+    )
+
+    engineered_response = call_chatgpt(
+        instructions=engineered_instructions,
         user_prompt=engineered_prompt,
         mock=mock,
     )
@@ -140,39 +246,42 @@ def generate_report(context: dict, mock: bool | None = None) -> dict:
     return {
         "naive_prompt": NAIVE_PROMPT,
         "naive_response": naive_response,
-        "engineered_system_prompt": system_prompt,
+
+        "engineered_instructions": engineered_instructions,
         "engineered_user_prompt": engineered_prompt,
         "engineered_response": engineered_response,
     }
 
 
-def save_comparison_markdown(result: dict, out_path: str):
-    md = f"""# Prompt engineering comparison
+# ---------------------------------------------------------------------------
+# SAVE COMPARISON
+# ---------------------------------------------------------------------------
 
-## Naive prompt
-**Prompt:** `{result['naive_prompt']}`
+def save_comparison_markdown(result: dict, out_path: str) -> None:
+    """
+    Save the naive-versus-engineered prompt comparison as Markdown.
+    """
 
-**Response:**
+    md = f"""# Prompt Engineering Comparison
+
+## Naive Prompt
+
+**Prompt:**
+
+`{result['naive_prompt']}`
+
+### Response
+
 {result['naive_response']}
 
 ---
 
-## Engineered prompt
+## Engineered Prompt
 
-**System prompt:**
-```
-{result['engineered_system_prompt']}
-```
+### Instructions
 
-**User prompt:**
-```
-{result['engineered_user_prompt']}
-```
-
-**Response:**
-{result['engineered_response']}
-
----
+```text
+{result['engineered_instructions']}
 
 ## Why the engineered version is better
 

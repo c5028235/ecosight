@@ -236,11 +236,11 @@ with tabs[3]:
                 job_power_kw = st.number_input("Power draw (kW)", min_value=1.0, value=20.0, step=1.0)
 
             if st.button("Suggest best start time"):
-                from dataloader import fetch_carbon_intensity
-                from rl_scheduler import suggest_start_time
+                from dataloader import fetch_carbon_intensity_forecast
+                from rl_scheduler import suggest_start_time, explain_suggestion
 
                 with st.spinner("Fetching current carbon intensity and consulting the trained policy..."):
-                    carbon_df = fetch_carbon_intensity(days=2)
+                    carbon_df = fetch_carbon_intensity_forecast(hours_ahead=max(24, int(job_deadline_hours) + 4))
                     carbon_series = carbon_df["carbon_intensity"].values
 
                     duration_slots = max(1, round(job_duration_hours * 2))  # 2 slots/hour (30-min slots)
@@ -250,6 +250,9 @@ with tabs[3]:
                         carbon_series, duration_slots, deadline_slot, job_power_kw,
                         policy_path=str(rl_policy_path),
                     )
+                    explanation = explain_suggestion(
+                        carbon_series, duration_slots, deadline_slot, job_power_kw, result,
+                    )
 
                 start_time = carbon_df["timestamp"].iloc[result["suggested_start_slot"]]
                 r1, r2, r3 = st.columns(3)
@@ -257,20 +260,29 @@ with tabs[3]:
                 r2.metric("Carbon saving vs starting now", f"{result['saving_pct']:.1f}%")
                 r3.metric("Estimated emissions", f"{result['suggested_cost_gco2']:,.0f} gCO2")
 
+                st.info(f"**Why this time?**\n\n{explanation['narrative']}")
+
                 if result["forced"]:
                     st.warning("No better window was available before the deadline -- the job had to start as early as possible.")
 
-                # Show the carbon curve with the suggested window highlighted
-                import matplotlib.pyplot as plt
-                fig, ax = plt.subplots(figsize=(9, 3))
-                ax.plot(carbon_df["timestamp"], carbon_series, color="gray", label="Carbon intensity")
-                start_idx = result["suggested_start_slot"]
-                end_idx = min(start_idx + duration_slots, len(carbon_series))
-                ax.axvspan(carbon_df["timestamp"].iloc[start_idx], carbon_df["timestamp"].iloc[end_idx - 1],
-                           color="tab:green", alpha=0.3, label="Suggested job window")
-                ax.set_ylabel("gCO2/kWh")
-                ax.legend()
-                st.pyplot(fig)
+                with st.expander("See the chart"):
+                    import matplotlib.pyplot as plt
+                    import matplotlib.dates as mdates
+
+                    fig, ax = plt.subplots(figsize=(9, 3))
+                    ax.plot(carbon_df["timestamp"], carbon_series, color="gray", label="Carbon intensity")
+                    start_idx = result["suggested_start_slot"]
+                    end_idx = min(start_idx + duration_slots, len(carbon_series))
+                    ax.axvspan(carbon_df["timestamp"].iloc[start_idx], carbon_df["timestamp"].iloc[end_idx - 1],
+                               color="tab:green", alpha=0.3, label="Suggested job window")
+                    best_idx = explanation["best_possible_start_slot"]
+                    ax.axvline(carbon_df["timestamp"].iloc[best_idx], color="tab:blue",
+                               linestyle="--", alpha=0.6, label="True lowest-carbon start")
+                    ax.set_ylabel("gCO2/kWh")
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %H:%M"))  # e.g. "Sat 18:00"
+                    fig.autofmt_xdate(rotation=30)
+                    ax.legend()
+                    st.pyplot(fig)
 
     st.divider()
     st.subheader("Approach comparison")
@@ -329,7 +341,7 @@ with tabs[5]:
     st.divider()
     st.subheader("Regenerate live")
     api_key_present = bool(st.text_input(
-        "Anthropic API key (leave blank to use mock mode)", type="password"
+        "OPenai API key (leave blank to use mock mode)", type="password"
     ))
 
     if st.button("Generate report now"):
@@ -344,3 +356,5 @@ with tabs[5]:
             result = generate_report(example_context, mock=not api_key_present)
             save_comparison_markdown(result, str(report_path))
         st.success("Report regenerated -- refresh to see it above.")
+
+

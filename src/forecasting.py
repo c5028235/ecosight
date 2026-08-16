@@ -1,28 +1,3 @@
-"""
-forecasting.py
---------------
-Builds and compares two forecasting approaches on the energy consumption
-series loaded by data_loader.py:
-
-1. A baseline regression model (Random Forest) using engineered features
-   (time-of-day, day-of-week, lag values, rolling averages).
-2. An LSTM (deep learning) model using raw sequences of past values.
-
-Why keep both: the baseline is fast, interpretable, and a fair benchmark.
-The LSTM is only worth the extra complexity/training cost if it clearly
-beats the baseline -- which is exactly the comparison your write-up should
-make when justifying "why deep learning" rather than assuming it's always
-the right tool.
-
-IMPORTANT -- train/test split:
-This uses a TIME-BASED split (train on the earlier period, test on the
-later period), NOT a random shuffle split. Random splitting would leak
-future information into training (the model could "see" patterns from
-data that comes after the point it's meant to be predicting), which is a
-classic mistake with time-series data and worth flagging explicitly in
-your report.
-"""
-
 from __future__ import annotations
 
 import numpy as np

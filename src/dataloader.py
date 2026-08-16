@@ -1,25 +1,3 @@
-"""
-data_loader.py
---------------
-Handles all data ingestion for EcoSight.
-
-Two data sources are supported:
-1. Energy consumption data (e.g. the Kaggle "Hourly Energy Consumption"
-   or UCI "Individual Household Electric Power Consumption" datasets).
-   If no real file is found, a realistic synthetic dataset is generated
-   instead, so the rest of the pipeline can be built and tested before
-   the real dataset is downloaded.
-2. UK Carbon Intensity data, pulled live from the National Grid ESO
-   public API (https://api.carbonintensity.org.uk). If the API can't be
-   reached (e.g. no internet, or running in a sandboxed environment),
-   a synthetic but realistic carbon-intensity series is generated instead.
-
-Design note: keeping a synthetic fallback for both sources means every
-downstream component (forecasting, clustering, the GA scheduler) can be
-built and demoed even before real data is wired in -- and the same
-functions work unchanged once the real files/API are available.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -38,14 +16,7 @@ from datetime import datetime, timedelta, timezone
 # ---------------------------------------------------------------------------
 # 1. Energy consumption data
 # ---------------------------------------------------------------------------
-
-def generate_synthetic_energy_data(
-    start: str = "2024-01-01",
-    days: int = 90,
-    freq: str = "h",
-    seed: int = 42,
-) -> pd.DataFrame:
-    """
+"""
     Generate a realistic synthetic hourly energy consumption series.
 
     Includes:
@@ -56,6 +27,13 @@ def generate_synthetic_energy_data(
 
     Returns a DataFrame with columns: timestamp, consumption_kwh
     """
+def generate_synthetic_energy_data(
+    start: str = "2024-01-01",
+    days: int = 90,
+    freq: str = "h",
+    seed: int = 42,
+) -> pd.DataFrame:
+    
     rng = np.random.default_rng(seed)
     periods = days * 24 if freq == "h" else days
     timestamps = pd.date_range(start=start, periods=periods, freq=freq)
@@ -86,21 +64,13 @@ def generate_synthetic_energy_data(
         "consumption_kwh": consumption.round(3),
     })
 
-
-def load_energy_dataset(path: str | None = None) -> pd.DataFrame:
-    """
+"""
     Load a real energy dataset from disk if available, otherwise fall back
     to synthetic data.
 
-    Expected real CSV format: at minimum a timestamp column and a numeric
-    consumption column. Column names are auto-detected from common variants
-    used in the Kaggle/UCI datasets and normalised to (timestamp, consumption).
-
-    The detected unit (e.g. "MW" for grid-scale datasets like PJM, or "kWh"
-    for household-scale datasets) is stored in df.attrs["unit"] rather than
-    baked into the column name -- this keeps the column name honest instead
-    of mislabeling megawatt grid data as kWh.
     """
+def load_energy_dataset(path: str | None = None) -> pd.DataFrame:
+    
     if path and Path(path).exists():
         df = pd.read_csv(path)
 
@@ -148,15 +118,16 @@ def load_energy_dataset(path: str | None = None) -> pd.DataFrame:
 
 CARBON_API_BASE = "https://api.carbonintensity.org.uk"
 
-
-def generate_synthetic_carbon_intensity(
-    start: str = "2024-01-01", days: int = 7
-) -> pd.DataFrame:
-    """
+"""
     Generate a synthetic half-hourly carbon intensity series (gCO2/kWh)
     that mimics the real UK grid pattern: lower at night (more wind/nuclear
     relative to demand), higher during the evening peak (more gas).
     """
+
+def generate_synthetic_carbon_intensity(
+    start: str = "2024-01-01", days: int = 7
+) -> pd.DataFrame:
+    
     rng = np.random.default_rng(7)
     timestamps = pd.date_range(start=start, periods=days * 48, freq="30min")  # 48 half-hour slots/day
     hours = timestamps.hour.values + timestamps.minute.values / 60
@@ -171,16 +142,14 @@ def generate_synthetic_carbon_intensity(
         "carbon_intensity": intensity.round(1),
     })
 
-
-def fetch_carbon_intensity(days: int = 2) -> pd.DataFrame:
-    """
+"""
     Fetch live UK carbon intensity data (national, half-hourly) for the last
     `days` days from the National Grid ESO public API.
 
-    Falls back to synthetic data if the API is unreachable (e.g. no network
-    access in a sandboxed environment) -- so this function is always safe
-    to call.
+    Falls back to synthetic data if the API is unreachable
     """
+def fetch_carbon_intensity(days: int = 2) -> pd.DataFrame:
+    
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     url = (
@@ -207,6 +176,43 @@ def fetch_carbon_intensity(days: int = 2) -> pd.DataFrame:
         print(f"Could not reach Carbon Intensity API ({e}). Using synthetic data instead.")
         return generate_synthetic_carbon_intensity(days=days)
 
+"""
+    This is the one to use for "when should I run
+    this job" style scheduling suggestions
+    The real API returns forecast intensity values for future timestamps.
+    """
+def fetch_carbon_intensity_forecast(hours_ahead: int = 48) -> pd.DataFrame:
+    
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(hours=hours_ahead)
+    url = (
+        f"{CARBON_API_BASE}/intensity/"
+        f"{start.strftime('%Y-%m-%dT%H:%MZ')}/{end.strftime('%Y-%m-%dT%H:%MZ')}"
+    )
+
+    try:
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        records = resp.json()["data"]
+        df = pd.DataFrame([
+            {
+                "timestamp": r["from"],
+                "carbon_intensity": r["intensity"]["actual"] or r["intensity"]["forecast"],
+            }
+            for r in records
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        print(f"Fetched {len(df)} forward-looking carbon intensity records from the API.")
+        return df
+
+    except Exception as e:
+        print(f"Could not reach Carbon Intensity API ({e}). Using synthetic forecast data instead.")
+        now_rounded = pd.Timestamp.now(tz="UTC").floor("30min")
+        n_slots_needed = hours_ahead * 2
+        days_needed = (n_slots_needed // 48) + 2  # generate a little extra, then trim
+        df = generate_synthetic_carbon_intensity(start=now_rounded, days=days_needed)
+        return df.iloc[:n_slots_needed].reset_index(drop=True)
+
 
 if __name__ == "__main__":
     print("\n--- Energy dataset ---")
@@ -219,3 +225,5 @@ if __name__ == "__main__":
     carbon_df = fetch_carbon_intensity(days=2)
     print(carbon_df.head())
     print(carbon_df.describe())
+
+

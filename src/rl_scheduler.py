@@ -1,34 +1,3 @@
-"""
-rl_scheduler.py
-----------------
-The advanced / novel component: a reinforcement learning agent (tabular
-Q-learning) that learns a general POLICY for deciding when to start a
-flexible job, given the current carbon intensity and how much slack time
-remains before its deadline.
-
-How this differs from the GA scheduler (scheduler.py):
-- The GA searches for a good schedule for ONE specific set of jobs and ONE
-  specific carbon curve. Run it again on a new day / new jobs, and it has
-  to search again from scratch.
-- The RL agent instead learns a reusable DECISION RULE ("if carbon is high
-  and I still have plenty of slack, wait; if carbon is low, or I'm almost
-  out of slack, start now") from many training episodes. Once trained, it
-  can make an instant decision for a brand new job or a brand new carbon
-  curve it has never seen, with no re-optimisation needed.
-- Trade-off: the RL agent here decides about ONE job in isolation (no
-  shared-resource concurrency constraint), whereas the GA jointly
-  schedules multiple competing jobs under a concurrency limit. They are
-  solving related but different versions of the problem -- which is
-  exactly the kind of honest comparison worth making in the report,
-  rather than claiming one simply "beats" the other.
-
-This is intentionally a tabular Q-learning agent (not deep RL): with a
-small, discretised state space, a Q-table trains fast, is fully
-inspectable (you can print the whole learned policy), and avoids the
-extra complexity of neural function approximation when it isn't needed
--- itself a defensible design decision to explain in an interview.
-"""
-
 from __future__ import annotations
 
 import random
@@ -39,10 +8,7 @@ from pathlib import Path
 
 # Anchor all output paths to the project root (the folder containing src/,
 # models/, docs/, data/) rather than trusting the current working
-# directory. This script lives at ecosight/src/rl_scheduler.py, so its
-# parent's parent is the project root -- this makes the script produce
-# correct output whether it's run as `python3 src/rl_scheduler.py` from
-# ecosight/, or as `python3 rl_scheduler.py` from inside src/ itself.
+# directory.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -109,14 +75,11 @@ class JobSchedulingEnv:
         forced = slack <= 0
 
         if action == ACTION_START or forced:
-            end = min(self.current_slot + self.duration,
-                      len(self.carbon_series))
-            carbon_cost = self.carbon_series[self.current_slot:end].sum(
-            ) * self.power_kw * 0.5
+            end = min(self.current_slot + self.duration, len(self.carbon_series))
+            carbon_cost = self.carbon_series[self.current_slot:end].sum() * self.power_kw * 0.5
             reward = -carbon_cost / 1000.0  # scaled for stable Q-value magnitudes
             done = True
-            info = {"started_at": self.current_slot,
-                    "carbon_cost": carbon_cost, "forced": forced}
+            info = {"started_at": self.current_slot, "carbon_cost": carbon_cost, "forced": forced}
             return None, reward, done, info
 
         # WAIT: advance one slot, no immediate cost
@@ -148,16 +111,14 @@ def train_q_learning(
     rewards_history = []
 
     for ep in range(n_episodes):
-        epsilon = epsilon_start + \
-            (epsilon_end - epsilon_start) * (ep / n_episodes)
+        epsilon = epsilon_start + (epsilon_end - epsilon_start) * (ep / n_episodes)
 
         # Randomised job for this training episode -- this variety is what
         # lets the learned policy generalise, rather than memorising one job.
         duration = rng.randint(2, 8)
         earliest_start = rng.randint(0, len(carbon_series) - 20)
         slack_room = rng.randint(2, 15)
-        deadline = min(earliest_start + duration +
-                       slack_room, len(carbon_series))
+        deadline = min(earliest_start + duration + slack_room, len(carbon_series))
 
         state = env.reset(duration, earliest_start, deadline)
         done = False
@@ -175,11 +136,9 @@ def train_q_learning(
             if done:
                 target = reward
             else:
-                target = reward + gamma * \
-                    np.max(Q[next_state[0], next_state[1]])
+                target = reward + gamma * np.max(Q[next_state[0], next_state[1]])
 
-            Q[state[0], state[1], action] += alpha * \
-                (target - Q[state[0], state[1], action])
+            Q[state[0], state[1], action] += alpha * (target - Q[state[0], state[1], action])
             state = next_state
 
         rewards_history.append(total_reward)
@@ -215,10 +174,7 @@ def load_policy(path: str):
     saved = joblib.load(path)
     return saved["Q"], saved["bin_edges"]
 
-
-def suggest_start_time(carbon_series: np.ndarray, duration_slots: int, deadline_slot: int,
-                       power_kw: float, policy_path: str = None):
-    """
+"""
     Convenience wrapper for interactive use (e.g. from the dashboard):
     loads the saved trained policy and returns a suggested start slot for
     one new job, given the current carbon curve.
@@ -226,8 +182,10 @@ def suggest_start_time(carbon_series: np.ndarray, duration_slots: int, deadline_
     Also returns the "naive" (start immediately) cost for comparison, so
     callers can show the saving.
     """
-    Q, bin_edges = load_policy(policy_path or str(
-        PROJECT_ROOT / "models" / "rl_policy.joblib"))
+def suggest_start_time(carbon_series: np.ndarray, duration_slots: int, deadline_slot: int,
+                        power_kw: float, policy_path: str = None):
+    
+    Q, bin_edges = load_policy(policy_path or str(PROJECT_ROOT / "models" / "rl_policy.joblib"))
 
     suggested_start, suggested_cost, forced = run_policy(
         Q, bin_edges, carbon_series, duration_slots, 0, deadline_slot, power_kw=power_kw
@@ -241,6 +199,88 @@ def suggest_start_time(carbon_series: np.ndarray, duration_slots: int, deadline_
         "naive_cost_gco2": naive_cost,
         "saving_pct": (naive_cost - suggested_cost) / naive_cost * 100 if naive_cost > 0 else 0.0,
         "forced": forced,
+    }
+
+"""
+    Builds a grounded, plain-English explanation of WHY the policy chose
+    the start time it did -- not just what it chose. This showcases our explainablity feature
+    """
+def explain_suggestion(carbon_series: np.ndarray, duration_slots: int, deadline_slot: int,
+                        power_kw: float, result: dict) -> dict:
+    
+    feasible_starts = range(0, max(deadline_slot - duration_slots, 0) + 1)
+    costs = {
+        s: carbon_series[s:s + duration_slots].sum() * power_kw * 0.5
+        for s in feasible_starts
+    }
+    best_start = min(costs, key=costs.get)
+    best_cost = costs[best_start]
+    worst_cost = max(costs.values())
+
+    chosen_start = result["suggested_start_slot"]
+    chosen_cost = result["suggested_cost_gco2"]
+
+    gap_to_optimal_pct = (
+        (chosen_cost - best_cost) / best_cost * 100 if best_cost > 0 else 0.0
+    )
+    window_avg_intensity = float(np.mean(carbon_series[0:deadline_slot]))
+    chosen_avg_intensity = float(np.mean(carbon_series[chosen_start:chosen_start + duration_slots]))
+    pct_below_window_avg = (
+        (window_avg_intensity - chosen_avg_intensity) / window_avg_intensity * 100
+        if window_avg_intensity > 0 else 0.0
+    )
+
+    lines = []
+
+    if result["forced"]:
+        if abs(gap_to_optimal_pct) < 1.0:
+            lines.append(
+                "There wasn't enough slack before the deadline to wait for a better window, "
+                "so the job had to start as early as possible -- but this happens to already be "
+                "the lowest-carbon option in the whole timeframe, so no carbon was left on the table."
+            )
+        else:
+            lines.append(
+                f"There wasn't enough slack before the deadline to wait for a better window, "
+                f"so the job had to start as early as possible. The lowest-carbon option in this "
+                f"timeframe would actually have been at slot {best_start} ({best_cost:,.0f} gCO2, "
+                f"{gap_to_optimal_pct:.1f}% better) -- but the deadline didn't allow reaching it. "
+                f"A longer deadline would give the scheduler more room to find a cleaner window."
+            )
+    else:
+        lines.append(
+            f"The policy chose to wait and start at slot {chosen_start} rather than immediately, "
+            f"because carbon intensity there ({chosen_avg_intensity:.0f} gCO2/kWh average over the "
+            f"job's duration) is {pct_below_window_avg:.0f}% below the "
+            f"{window_avg_intensity:.0f} gCO2/kWh average across the whole time it was allowed to consider."
+        )
+
+        if abs(gap_to_optimal_pct) < 1.0:
+            lines.append(
+                "This was in fact the lowest-carbon feasible window available in the whole "
+                "search range -- the policy found the true best option."
+            )
+        else:
+            lines.append(
+                f"The true lowest-carbon option in this window would have started at slot {best_start} "
+                f"({best_cost:,.0f} gCO2 total), which is {gap_to_optimal_pct:.1f}% better than what the "
+                f"policy chose. This gap is expected: this is a tabular Q-learning agent with a "
+                f"coarse, discretised view of carbon levels and remaining slack, so it approximates "
+                f"the optimal choice rather than guaranteeing it."
+            )
+
+    lines.append(
+        f"Compared to starting immediately, this saves {result['saving_pct']:.1f}% "
+        f"({result['naive_cost_gco2']:,.0f} gCO2 naive vs {result['suggested_cost_gco2']:,.0f} gCO2 suggested)."
+    )
+
+    return {
+        "narrative": " ".join(lines),
+        "best_possible_start_slot": best_start,
+        "best_possible_cost_gco2": best_cost,
+        "gap_to_optimal_pct": gap_to_optimal_pct,
+        "window_avg_intensity": window_avg_intensity,
+        "chosen_avg_intensity": chosen_avg_intensity,
     }
 
 
@@ -299,32 +339,25 @@ if __name__ == "__main__":
     # Train on a longer carbon history for variety across episodes
     carbon_df = fetch_carbon_intensity(days=14)
     carbon_series = carbon_df["carbon_intensity"].values
-    print(
-        f"Training on {len(carbon_series)} half-hour slots of carbon data...")
+    print(f"Training on {len(carbon_series)} half-hour slots of carbon data...")
 
-    Q, bin_edges, rewards_history = train_q_learning(
-        carbon_series, n_episodes=5000)
+    Q, bin_edges, rewards_history = train_q_learning(carbon_series, n_episodes=5000)
 
     Path(PROJECT_ROOT / "models").mkdir(exist_ok=True)
-    save_policy(Q, bin_edges, str(
-        PROJECT_ROOT / "models" / "rl_policy.joblib"))
+    save_policy(Q, bin_edges, str(PROJECT_ROOT / "models" / "rl_policy.joblib"))
 
     Path(PROJECT_ROOT / "docs").mkdir(exist_ok=True)
-    plot_training_curve(rewards_history, str(
-        PROJECT_ROOT / "docs" / "rl_training_curve.png"))
-    plot_policy_table(Q, bin_edges, str(
-        PROJECT_ROOT / "docs" / "rl_policy_table.png"))
+    plot_training_curve(rewards_history, str(PROJECT_ROOT / "docs" / "rl_training_curve.png"))
+    plot_policy_table(Q, bin_edges, str(PROJECT_ROOT / "docs" / "rl_policy_table.png"))
 
     # --- Evaluate the trained policy on a fresh, held-out test window ---
     test_carbon_df = fetch_carbon_intensity(days=2)
     test_carbon = test_carbon_df["carbon_intensity"].values
 
-    jobs = generate_synthetic_jobs(
-        n_jobs=12, n_slots=len(test_carbon), seed=99)
+    jobs = generate_synthetic_jobs(n_jobs=12, n_slots=len(test_carbon), seed=99)
 
     naive_schedule = [job["earliest_start"] for job in jobs]
-    naive_carbon, _ = evaluate_schedule(
-        naive_schedule, jobs, test_carbon, max_concurrent=999)
+    naive_carbon, _ = evaluate_schedule(naive_schedule, jobs, test_carbon, max_concurrent=999)
 
     rl_schedule = []
     rl_total_carbon = 0.0

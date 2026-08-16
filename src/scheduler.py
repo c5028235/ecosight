@@ -1,27 +1,3 @@
-"""
-scheduler.py
-------------
-Uses a genetic algorithm (via DEAP) to schedule a set of flexible compute
-jobs against a carbon intensity time series, choosing start times that
-minimise total carbon emitted, subject to:
-  - each job having an earliest start time and a deadline
-  - a shared resource limit (only N jobs may run concurrently -- e.g. a
-    fixed-size compute cluster)
-
-Why a GA rather than just picking the lowest-carbon slot per job:
-if jobs were scheduled independently, they'd likely all pile into the same
-lowest-carbon window, breaching the concurrency limit. This turns it into
-a genuine combinatorial scheduling problem (which jobs share the good
-slots, which get pushed to slightly worse ones) -- exactly the kind of
-problem evolutionary algorithms are well suited to, where an exact
-solution is expensive but a good-enough solution found by evolving
-candidate schedules works well in practice.
-
-The result is compared against a "naive" baseline: every job starts
-immediately at its earliest possible start time, ignoring carbon cost
-entirely (this is what most schedulers do by default today).
-"""
-
 from __future__ import annotations
 
 import random
@@ -42,9 +18,7 @@ from deap import base, creator, tools, algorithms
 # ---------------------------------------------------------------------------
 # Synthetic job generation
 # ---------------------------------------------------------------------------
-
-def generate_synthetic_jobs(n_jobs: int, n_slots: int, seed: int = 42) -> list[dict]:
-    """
+"""
     Generate synthetic flexible compute jobs.
     Each job has:
       - duration: how many half-hour slots it needs to run for
@@ -52,6 +26,8 @@ def generate_synthetic_jobs(n_jobs: int, n_slots: int, seed: int = 42) -> list[d
       - deadline: the slot by which it must have finished
       - power_kw: its power draw while running (used to weight carbon cost)
     """
+def generate_synthetic_jobs(n_jobs: int, n_slots: int, seed: int = 42) -> list[dict]:
+   
     rng = random.Random(seed)
     jobs = []
     for i in range(n_jobs):
@@ -73,20 +49,20 @@ def generate_synthetic_jobs(n_jobs: int, n_slots: int, seed: int = 42) -> list[d
 # ---------------------------------------------------------------------------
 # Schedule evaluation
 # ---------------------------------------------------------------------------
-
-def evaluate_schedule(
-    start_times: list[int],
-    jobs: list[dict],
-    carbon: np.ndarray,
-    max_concurrent: int,
-) -> tuple[float, int]:
-    """
+"""
     Given a proposed start time for each job, compute:
       - total_carbon: sum of (power_kw * 0.5h * carbon_intensity) across all
         slots each job occupies
       - violations: count of time slots where more than max_concurrent jobs
         are running simultaneously (a constraint violation)
     """
+def evaluate_schedule(
+    start_times: list[int],
+    jobs: list[dict],
+    carbon: np.ndarray,
+    max_concurrent: int,
+) -> tuple[float, int]:
+    
     n_slots = len(carbon)
     occupancy = np.zeros(n_slots)
     total_carbon = 0.0

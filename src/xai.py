@@ -1,31 +1,3 @@
-"""
-xai.py
-------
-Adds explainability to the Random Forest forecasting model using SHAP
-(SHapley Additive exPlanations).
-
-Why SHAP and why the Random Forest (not the LSTM):
-- SHAP's TreeExplainer is fast and exact for tree-based models like Random
-  Forest, whereas explaining an LSTM properly needs slower, approximate
-  methods (e.g. KernelExplainer or DeepExplainer) that are far more
-  fiddly to get right for demo purposes.
-- This is also a fair pairing: the Random Forest was the stronger model
-  in your evaluation, so it's the one worth being able to explain and
-  trust in front of a stakeholder.
-
-This produces three outputs:
-  1. A global feature importance summary (bar chart) -- "which features
-     matter most, on average, across all predictions".
-  2. A beeswarm summary plot -- "which features matter most, AND whether
-     high/low values of that feature push the prediction up or down".
-  3. A waterfall plot for one specific prediction -- "why did the model
-     predict THIS particular value for THIS particular hour".
-
-This last one is the key business-facing output: it lets you answer
-"why does the model think demand will be high at 6pm on Tuesday?" with a
-concrete, defensible breakdown rather than a black-box number.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -36,8 +8,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Anchor all input/output paths to the project root (the folder containing
-# src/, models/, docs/, data/) rather than trusting the current working
-# directory, so this script works correctly no matter which folder it's
+# src/, models/, docs/, data/), so this script works correctly no matter which folder it's
 # run from.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,13 +25,13 @@ def load_or_train_model(train_df: pd.DataFrame, feature_cols: list[str], model_p
     model.fit(train_df[feature_cols], train_df["consumption"])
     return model
 
-
-def compute_shap_values(model, X_sample: pd.DataFrame):
-    """
+"""
     TreeExplainer computes exact SHAP values efficiently for tree-based
     models by exploiting the tree structure, rather than needing to
     approximate via repeated sampling as model-agnostic explainers do.
     """
+def compute_shap_values(model, X_sample: pd.DataFrame):
+    
     explainer = shap.TreeExplainer(model)
     shap_values = explainer(X_sample)
     return explainer, shap_values
@@ -85,14 +56,14 @@ def plot_beeswarm(shap_values, out_path: str):
     plt.close()
     print(f"Saved beeswarm summary plot to {out_path}")
 
-
-def explain_single_prediction(model, explainer, shap_values, X_sample: pd.DataFrame,
-                                index: int, unit: str, out_path: str) -> dict:
-    """
+"""
     Produce a waterfall plot and a plain-English breakdown for one specific
     prediction -- e.g. "the model predicted 42,300 MW for this hour; here's
     exactly why, in order of impact".
     """
+def explain_single_prediction(model, explainer, shap_values, X_sample: pd.DataFrame,
+                                index: int, unit: str, out_path: str) -> dict:
+    
     plt.figure()
     shap.plots.waterfall(shap_values[index], show=False)
     plt.title(f"Why this prediction? (row {index})")
