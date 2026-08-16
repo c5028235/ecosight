@@ -1,6 +1,6 @@
 """
+prompt_engineering.py
 ----------------------
-
 Uses an LLM (Claude, via the Anthropic API) to turn EcoSight's numeric
 outputs (forecast accuracy, cluster findings, carbon savings) into a
 plain-English report a non-technical stakeholder could actually read.
@@ -33,6 +33,12 @@ from __future__ import annotations
 import os
 import json
 from pathlib import Path
+
+# Anchor all input/output paths to the project root (the folder containing
+# src/, models/, docs/, data/) rather than trusting the current working
+# directory, so this script works correctly no matter which folder it's
+# run from.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 NAIVE_PROMPT = "Write about the energy data."
@@ -213,5 +219,5 @@ if __name__ == "__main__":
     print("\n=== ENGINEERED PROMPT RESPONSE ===")
     print(result["engineered_response"])
 
-    Path("docs").mkdir(exist_ok=True)
-    save_comparison_markdown(result, "docs/prompt_comparison.md")
+    (PROJECT_ROOT / "docs").mkdir(exist_ok=True)
+    save_comparison_markdown(result, str(PROJECT_ROOT / "docs" / "prompt_comparison.md"))

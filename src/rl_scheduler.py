@@ -37,6 +37,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+# Anchor all output paths to the project root (the folder containing src/,
+# models/, docs/, data/) rather than trusting the current working
+# directory. This script lives at ecosight/src/rl_scheduler.py, so its
+# parent's parent is the project root -- this makes the script produce
+# correct output whether it's run as `python3 src/rl_scheduler.py` from
+# ecosight/, or as `python3 rl_scheduler.py` from inside src/ itself.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 ACTION_WAIT = 0
 ACTION_START = 1
@@ -101,11 +109,14 @@ class JobSchedulingEnv:
         forced = slack <= 0
 
         if action == ACTION_START or forced:
-            end = min(self.current_slot + self.duration, len(self.carbon_series))
-            carbon_cost = self.carbon_series[self.current_slot:end].sum() * self.power_kw * 0.5
+            end = min(self.current_slot + self.duration,
+                      len(self.carbon_series))
+            carbon_cost = self.carbon_series[self.current_slot:end].sum(
+            ) * self.power_kw * 0.5
             reward = -carbon_cost / 1000.0  # scaled for stable Q-value magnitudes
             done = True
-            info = {"started_at": self.current_slot, "carbon_cost": carbon_cost, "forced": forced}
+            info = {"started_at": self.current_slot,
+                    "carbon_cost": carbon_cost, "forced": forced}
             return None, reward, done, info
 
         # WAIT: advance one slot, no immediate cost
@@ -137,14 +148,16 @@ def train_q_learning(
     rewards_history = []
 
     for ep in range(n_episodes):
-        epsilon = epsilon_start + (epsilon_end - epsilon_start) * (ep / n_episodes)
+        epsilon = epsilon_start + \
+            (epsilon_end - epsilon_start) * (ep / n_episodes)
 
         # Randomised job for this training episode -- this variety is what
         # lets the learned policy generalise, rather than memorising one job.
         duration = rng.randint(2, 8)
         earliest_start = rng.randint(0, len(carbon_series) - 20)
         slack_room = rng.randint(2, 15)
-        deadline = min(earliest_start + duration + slack_room, len(carbon_series))
+        deadline = min(earliest_start + duration +
+                       slack_room, len(carbon_series))
 
         state = env.reset(duration, earliest_start, deadline)
         done = False
@@ -162,9 +175,11 @@ def train_q_learning(
             if done:
                 target = reward
             else:
-                target = reward + gamma * np.max(Q[next_state[0], next_state[1]])
+                target = reward + gamma * \
+                    np.max(Q[next_state[0], next_state[1]])
 
-            Q[state[0], state[1], action] += alpha * (target - Q[state[0], state[1], action])
+            Q[state[0], state[1], action] += alpha * \
+                (target - Q[state[0], state[1], action])
             state = next_state
 
         rewards_history.append(total_reward)
@@ -187,6 +202,46 @@ def run_policy(Q, bin_edges, carbon_series, duration, earliest_start, deadline, 
         if done:
             return info["started_at"], info["carbon_cost"], info["forced"]
         state = next_state
+
+
+def save_policy(Q, bin_edges, path: str):
+    import joblib
+    joblib.dump({"Q": Q, "bin_edges": bin_edges}, path)
+    print(f"Saved trained policy to {path}")
+
+
+def load_policy(path: str):
+    import joblib
+    saved = joblib.load(path)
+    return saved["Q"], saved["bin_edges"]
+
+
+def suggest_start_time(carbon_series: np.ndarray, duration_slots: int, deadline_slot: int,
+                       power_kw: float, policy_path: str = None):
+    """
+    Convenience wrapper for interactive use (e.g. from the dashboard):
+    loads the saved trained policy and returns a suggested start slot for
+    one new job, given the current carbon curve.
+
+    Also returns the "naive" (start immediately) cost for comparison, so
+    callers can show the saving.
+    """
+    Q, bin_edges = load_policy(policy_path or str(
+        PROJECT_ROOT / "models" / "rl_policy.joblib"))
+
+    suggested_start, suggested_cost, forced = run_policy(
+        Q, bin_edges, carbon_series, duration_slots, 0, deadline_slot, power_kw=power_kw
+    )
+
+    naive_cost = carbon_series[0:duration_slots].sum() * power_kw * 0.5
+
+    return {
+        "suggested_start_slot": suggested_start,
+        "suggested_cost_gco2": suggested_cost,
+        "naive_cost_gco2": naive_cost,
+        "saving_pct": (naive_cost - suggested_cost) / naive_cost * 100 if naive_cost > 0 else 0.0,
+        "forced": forced,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -244,22 +299,32 @@ if __name__ == "__main__":
     # Train on a longer carbon history for variety across episodes
     carbon_df = fetch_carbon_intensity(days=14)
     carbon_series = carbon_df["carbon_intensity"].values
-    print(f"Training on {len(carbon_series)} half-hour slots of carbon data...")
+    print(
+        f"Training on {len(carbon_series)} half-hour slots of carbon data...")
 
-    Q, bin_edges, rewards_history = train_q_learning(carbon_series, n_episodes=5000)
+    Q, bin_edges, rewards_history = train_q_learning(
+        carbon_series, n_episodes=5000)
 
-    Path("docs").mkdir(exist_ok=True)
-    plot_training_curve(rewards_history, "docs/rl_training_curve.png")
-    plot_policy_table(Q, bin_edges, "docs/rl_policy_table.png")
+    Path(PROJECT_ROOT / "models").mkdir(exist_ok=True)
+    save_policy(Q, bin_edges, str(
+        PROJECT_ROOT / "models" / "rl_policy.joblib"))
+
+    Path(PROJECT_ROOT / "docs").mkdir(exist_ok=True)
+    plot_training_curve(rewards_history, str(
+        PROJECT_ROOT / "docs" / "rl_training_curve.png"))
+    plot_policy_table(Q, bin_edges, str(
+        PROJECT_ROOT / "docs" / "rl_policy_table.png"))
 
     # --- Evaluate the trained policy on a fresh, held-out test window ---
     test_carbon_df = fetch_carbon_intensity(days=2)
     test_carbon = test_carbon_df["carbon_intensity"].values
 
-    jobs = generate_synthetic_jobs(n_jobs=12, n_slots=len(test_carbon), seed=99)
+    jobs = generate_synthetic_jobs(
+        n_jobs=12, n_slots=len(test_carbon), seed=99)
 
     naive_schedule = [job["earliest_start"] for job in jobs]
-    naive_carbon, _ = evaluate_schedule(naive_schedule, jobs, test_carbon, max_concurrent=999)
+    naive_carbon, _ = evaluate_schedule(
+        naive_schedule, jobs, test_carbon, max_concurrent=999)
 
     rl_schedule = []
     rl_total_carbon = 0.0
@@ -280,11 +345,11 @@ if __name__ == "__main__":
     print("\nNote: this RL agent decides each job independently (no shared")
     print("concurrency limit), unlike the GA scheduler -- see module docstring.")
 
-    Path("data").mkdir(exist_ok=True)
+    Path(PROJECT_ROOT / "data").mkdir(exist_ok=True)
     pd.DataFrame({
         "job_id": [j["job_id"] for j in jobs],
         "duration_slots": [j["duration"] for j in jobs],
         "naive_start": naive_schedule,
         "rl_start": rl_schedule,
-    }).to_csv("data/rl_schedule_result.csv", index=False)
+    }).to_csv(str(PROJECT_ROOT / "data" / "rl_schedule_result.csv"), index=False)
     print("Saved RL schedule details to data/rl_schedule_result.csv")

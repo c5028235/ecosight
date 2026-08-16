@@ -1,3 +1,27 @@
+"""
+scheduler.py
+------------
+Uses a genetic algorithm (via DEAP) to schedule a set of flexible compute
+jobs against a carbon intensity time series, choosing start times that
+minimise total carbon emitted, subject to:
+  - each job having an earliest start time and a deadline
+  - a shared resource limit (only N jobs may run concurrently -- e.g. a
+    fixed-size compute cluster)
+
+Why a GA rather than just picking the lowest-carbon slot per job:
+if jobs were scheduled independently, they'd likely all pile into the same
+lowest-carbon window, breaching the concurrency limit. This turns it into
+a genuine combinatorial scheduling problem (which jobs share the good
+slots, which get pushed to slightly worse ones) -- exactly the kind of
+problem evolutionary algorithms are well suited to, where an exact
+solution is expensive but a good-enough solution found by evolving
+candidate schedules works well in practice.
+
+The result is compared against a "naive" baseline: every job starts
+immediately at its earliest possible start time, ignoring carbon cost
+entirely (this is what most schedulers do by default today).
+"""
+
 from __future__ import annotations
 
 import random
@@ -5,6 +29,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+
+# Anchor all input/output paths to the project root (the folder containing
+# src/, models/, docs/, data/) rather than trusting the current working
+# directory, so this script works correctly no matter which folder it's
+# run from.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from deap import base, creator, tools, algorithms
 
@@ -177,7 +207,7 @@ if __name__ == "__main__":
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from dataloader import fetch_carbon_intensity
-    
+
     carbon_df = fetch_carbon_intensity(days=2)
     carbon = carbon_df["carbon_intensity"].values
     n_slots = len(carbon)
@@ -203,19 +233,18 @@ if __name__ == "__main__":
     saving_pct = (naive_carbon - ga_carbon) / naive_carbon * 100
     print(f"\nCarbon saving vs naive schedule: {saving_pct:.1f}%")
 
-    Path("docs").mkdir(exist_ok=True)
+    (PROJECT_ROOT / "docs").mkdir(exist_ok=True)
     plot_schedule_comparison(
         jobs, carbon, naive_schedule, ga_schedule, naive_carbon, ga_carbon,
-        out_path="docs/schedule_comparison.png",
+        out_path=str(PROJECT_ROOT / "docs" / "schedule_comparison.png"),
     )
 
-    Path("data").mkdir(exist_ok=True)
+    (PROJECT_ROOT / "data").mkdir(exist_ok=True)
     pd.DataFrame({
         "job_id": [j["job_id"] for j in jobs],
         "duration_slots": [j["duration"] for j in jobs],
         "power_kw": [j["power_kw"] for j in jobs],
         "naive_start": naive_schedule,
         "ga_start": ga_schedule,
-    }).to_csv("data/schedule_result.csv", index=False)
+    }).to_csv(str(PROJECT_ROOT / "data" / "schedule_result.csv"), index=False)
     print("Saved schedule details to data/schedule_result.csv")
-

@@ -24,6 +24,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+# Anchor all input/output paths to the project root (the folder containing
+# src/, models/, docs/, data/) rather than trusting the current working
+# directory, so this script works correctly no matter which folder it's
+# run from.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
@@ -124,7 +130,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
     from dataloader import load_energy_dataset
 
-    df = load_energy_dataset("data/energy_consumption.csv")
+    df = load_energy_dataset(str(PROJECT_ROOT / "data" / "energy_consumption.csv"))
     unit = df.attrs.get("unit", "units")
     print(f"Loaded {len(df)} rows. Unit: {unit}")
 
@@ -139,13 +145,13 @@ if __name__ == "__main__":
     # Attach cluster labels back to the daily profile table and save
     result = pivot.copy()
     result["cluster"] = labels
-    Path("data").mkdir(exist_ok=True)
-    result.to_csv("data/daily_clusters.csv")
+    (PROJECT_ROOT / "data").mkdir(exist_ok=True)
+    result.to_csv(str(PROJECT_ROOT / "data" / "daily_clusters.csv"))
     print("Saved cluster assignments to data/daily_clusters.csv")
 
-    Path("docs").mkdir(exist_ok=True)
-    plot_cluster_centroids(pivot, labels, "docs/cluster_centroids.png")
-    plot_pca_scatter(X, labels, "docs/cluster_pca_scatter.png")
+    (PROJECT_ROOT / "docs").mkdir(exist_ok=True)
+    plot_cluster_centroids(pivot, labels, str(PROJECT_ROOT / "docs" / "cluster_centroids.png"))
+    plot_pca_scatter(X, labels, str(PROJECT_ROOT / "docs" / "cluster_pca_scatter.png"))
 
     print("\nCluster sizes:")
     print(pd.Series(labels).value_counts().sort_index())

@@ -1,9 +1,47 @@
+"""
+xai.py
+------
+Adds explainability to the Random Forest forecasting model using SHAP
+(SHapley Additive exPlanations).
+
+Why SHAP and why the Random Forest (not the LSTM):
+- SHAP's TreeExplainer is fast and exact for tree-based models like Random
+  Forest, whereas explaining an LSTM properly needs slower, approximate
+  methods (e.g. KernelExplainer or DeepExplainer) that are far more
+  fiddly to get right for demo purposes.
+- This is also a fair pairing: the Random Forest was the stronger model
+  in your evaluation, so it's the one worth being able to explain and
+  trust in front of a stakeholder.
+
+This produces three outputs:
+  1. A global feature importance summary (bar chart) -- "which features
+     matter most, on average, across all predictions".
+  2. A beeswarm summary plot -- "which features matter most, AND whether
+     high/low values of that feature push the prediction up or down".
+  3. A waterfall plot for one specific prediction -- "why did the model
+     predict THIS particular value for THIS particular hour".
+
+This last one is the key business-facing output: it lets you answer
+"why does the model think demand will be high at 6pm on Tuesday?" with a
+concrete, defensible breakdown rather than a black-box number.
+"""
+
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import joblib
 import shap
 import matplotlib.pyplot as plt
 from pathlib import Path
+
+# Anchor all input/output paths to the project root (the folder containing
+# src/, models/, docs/, data/) rather than trusting the current working
+# directory, so this script works correctly no matter which folder it's
+# run from.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
 def load_or_train_model(train_df: pd.DataFrame, feature_cols: list[str], model_path: str):
     """Load the saved Random Forest if it exists, otherwise train a fresh one."""
     if Path(model_path).exists():
@@ -92,14 +130,14 @@ if __name__ == "__main__":
     from dataloader import load_energy_dataset
     from forecasting import create_features, time_based_split, FEATURE_COLS
 
-    df = load_energy_dataset("data/energy_consumption.csv")
+    df = load_energy_dataset(str(PROJECT_ROOT / "data" / "energy_consumption.csv"))
     unit = df.attrs.get("unit", "units")
     print(f"Loaded {len(df)} rows. Unit: {unit}")
 
     feat_df = create_features(df)
     train_df, test_df = time_based_split(feat_df, test_fraction=0.2)
 
-    model = load_or_train_model(train_df, FEATURE_COLS, "models/rf_forecaster.joblib")
+    model = load_or_train_model(train_df, FEATURE_COLS, str(PROJECT_ROOT / "models" / "rf_forecaster.joblib"))
 
     # SHAP can be slow on very large samples -- 500 rows is plenty to get
     # stable, representative global importance and still runs quickly.
@@ -109,13 +147,13 @@ if __name__ == "__main__":
 
     explainer, shap_values = compute_shap_values(model, X_sample)
 
-    Path("docs").mkdir(exist_ok=True)
-    plot_global_importance(shap_values, "docs/shap_global_importance.png")
-    plot_beeswarm(shap_values, "docs/shap_beeswarm.png")
+    (PROJECT_ROOT / "docs").mkdir(exist_ok=True)
+    plot_global_importance(shap_values, str(PROJECT_ROOT / "docs" / "shap_global_importance.png"))
+    plot_beeswarm(shap_values, str(PROJECT_ROOT / "docs" / "shap_beeswarm.png"))
 
     # Explain one specific example prediction (row 0 of the sample)
     explain_single_prediction(
         model, explainer, shap_values, X_sample,
         index=0, unit=unit,
-        out_path="docs/shap_waterfall_example.png",
+        out_path=str(PROJECT_ROOT / "docs" / "shap_waterfall_example.png"),
     )
